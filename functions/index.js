@@ -43,20 +43,53 @@ app.get('/screams', (req, res) => {
                     screamId: doc.id,
                     body: doc.data().body,
                     userHandle: doc.data().userHandle,
-                    createdAt: doc.data().createdAt
+                    createdAt: doc.data().createdAt,
+                    commentCount: doc.data().commentCount,
+                    likeCount: doc.data().likeCount
                 });
             });
             return res.json(screams);
         })
         .catch(err => console.error(err));
-})
+});
 
+const FBAuth = (req, res, next) => {
+    let idToken;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        idToken = req.headers.authorization.split('Bearer ')[1];
+    } else {
+        console.error('No Token Found');
+        return res.status(403).json({ error: 'Unauthorized' });
+    }
 
+    admin.auth().verifyIdToken(idToken)
+        .then(decodedToken => {
+            req.user = decodedToken;
+            console.log(decodedToken);
+            return db.collection('users')
+                .where('userId', '==', req.user.uid)
+                .limit(1)
+                .get();
+        })
+        .then(data => {
+            req.user.handle = data.docs[0].data().handle;
+            return next();
+        })
+        .catch(err => {
+            console.error('Error while verifying token', err);
+            return res.status(403).json(err);
+        })
+}
 
-app.post('/scream', (req, res) => {
+// Post one Scream
+app.post('/scream', FBAuth, (req, res) => {
+    if (req.body.body.trim() === '') {
+        return res.status(400).json({ body: 'Body must not be empty' });
+    }
+
     const newScream = {
         body: req.body.body,
-        userHandle: req.body.userHandle,
+        userHandle: req.user.handle,
         createdAt: new Date().toISOString()
     };
 
@@ -74,13 +107,13 @@ app.post('/scream', (req, res) => {
 
 const isEmail = (email) => {
     const regEx = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
-    if(email.match(regEx)) return true;
+    if (email.match(regEx)) return true;
     else return false;
 }
 
 //helper to check string is empty or not
-const isEmpty = (string) =>{
-    if(string.trim() === '') return true;
+const isEmpty = (string) => {
+    if (string.trim() === '') return true;
     else return false;
 };
 
@@ -92,21 +125,21 @@ app.post('/signup', (req, res) => {
         confirmPassword: req.body.confirmPassword,
         handle: req.body.handle,
     };
-    
+
     let errors = {};
 
-    if(isEmpty(newUser.email)){
+    if (isEmpty(newUser.email)) {
         errors.email = 'Must not be empty'
-    }else if(!isEmail(newUser.email)){
+    } else if (!isEmail(newUser.email)) {
         errors.email = 'Must be a valid email address';
     }
-    
-    if(isEmpty(newUser.password)) errors.password = 'Must not be empty';
-    if(newUser.password !== newUser.confirmPassword) errors.confirmPassword = 'Passwords Must Match';
-    if(isEmpty(newUser.handle)) errors.handle = 'Must not be empty';
-    
-    if(Object.keys(errors).length > 0) return res.status(400).json(errors);
-    
+
+    if (isEmpty(newUser.password)) errors.password = 'Must not be empty';
+    if (newUser.password !== newUser.confirmPassword) errors.confirmPassword = 'Passwords Must Match';
+    if (isEmpty(newUser.handle)) errors.handle = 'Must not be empty';
+
+    if (Object.keys(errors).length > 0) return res.status(400).json(errors);
+
 
     // TODO : validate data
     let token, userId
@@ -120,13 +153,13 @@ app.post('/signup', (req, res) => {
                     .createUserWithEmailAndPassword(newUser.email, newUser.password)
             }
         })
-        .then(data =>{
+        .then(data => {
             userId = data.user.uid;
-            return data.user.getIdToken();             
+            return data.user.getIdToken();
         })
-        .then(idToken =>{
+        .then(idToken => {
             token = idToken;
-            const userCredentials ={
+            const userCredentials = {
                 handle: newUser.handle,
                 email: newUser.email,
                 createdAt: new Date().toISOString(),
@@ -134,14 +167,14 @@ app.post('/signup', (req, res) => {
             };
             return db.doc(`/users/${newUser.handle}`).set(userCredentials);
         })
-        .then(()=>{
+        .then(() => {
             return res.status(201).json({ token })
         })
-        .catch(err =>{
+        .catch(err => {
             console.error(err);
-            if(err.code === 'auth/email-already-in-use'){
-                return res.status(400).json({ email : 'Email is already in use'})
-            }else{
+            if (err.code === 'auth/email-already-in-use') {
+                return res.status(400).json({ email: 'Email is already in use' })
+            } else {
                 return res.status(500).json({ error: err.code });
             }
 
@@ -153,25 +186,25 @@ app.post('/login', (req, res) => {
         email: req.body.email,
         password: req.body.password
     };
-    let errors ={};
+    let errors = {};
 
-    if(isEmpty(user.email)) errors.email = 'Must not be empty';
-    if(isEmpty(user.password)) errors.password = 'Must not be empty';
+    if (isEmpty(user.email)) errors.email = 'Must not be empty';
+    if (isEmpty(user.password)) errors.password = 'Must not be empty';
 
-    if(Object.keys(errors).length > 0) return res.status(400).json(errors);
+    if (Object.keys(errors).length > 0) return res.status(400).json(errors);
 
     firebase.auth().signInWithEmailAndPassword(user.email, user.password)
-        .then(data =>{
+        .then(data => {
             return data.user.getIdToken();
         })
-        .then(token =>{
-            return res.json({token});
+        .then(token => {
+            return res.json({ token });
         })
         .catch(err => {
             console.log(err);
-            if(err.code === 'auth/wrong-password'){
-                return res.status(403).json({ general: 'Wrong credentials, please try again'})
-            }else return res.status(500).json({error: err.code});
+            if (err.code === 'auth/wrong-password') {
+                return res.status(403).json({ general: 'Wrong credentials, please try again' })
+            } else return res.status(500).json({ error: err.code });
         })
 })
 
