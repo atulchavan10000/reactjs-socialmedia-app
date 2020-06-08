@@ -93,7 +93,7 @@ exports.createNotificationOnComment = functions.region('asia-east2').firestore.d
             .then(doc => {
                 // if the scream exists, we get its author i.e. userHandle 
                 // and create a notification for comment
-                if (doc.exists) {
+                if (doc.exists && doc.data().userHandle !== snapshot.data().userHandle) {
                     // creating a notification with the same id as snapshot i.e. comment id
                     return db.doc(`/notifications/${snapshot.id}`).set({
                         createdAt: new Date().toISOString(),
@@ -109,4 +109,52 @@ exports.createNotificationOnComment = functions.region('asia-east2').firestore.d
                 console.error(err);
                 return;
             });
+    })
+
+// make changes to imageUrl on all screams authored by user
+// iff they change their imageUrl on profile
+exports.onUserImageChange = functions.region('asia-east2').firestore.document('/users/{userId}')
+    .onUpdate((change) => {
+        console.log(change.before.data());
+        console.log(change.after.data());
+        if(change.before.data().imageUrl !== change.after.data().imageUrl){
+            console.log('image has changed');
+            const batch = db.batch();
+            return db.collection('screams').where('userHandle', '==', change.before.data().handle).get()
+                .then(data => {
+                    data.forEach(doc => {
+                        const scream = db.doc(`/screams/${doc.id}`);
+                        batch.update(scream, { userImage: change.after.data().imageUrl });
+                    })
+                    return batch.commit();
+                })  
+        } else return true;
+    })
+
+
+// if scream get deleted, then delete all related content like comments, likes, notifications from database
+exports.onScreamDelete = functions.region('asia-east2').firestore.document('/screams/{screamId}')
+    .onDelete((snapshot, context) => {
+        const screamId = context.params.screamId;
+        const batch = db.batch();
+        return db.collection('comments').where('screamId', '==', screamId).get()
+            .then(data => {
+                data.forEach(doc => {
+                    batch.delete(db.doc(`/comments/${doc.id}`));
+                })
+                return db.collection('likes').where('screamId', '==', screamId).get();
+            })
+            .then(data => {
+                data.forEach(doc => {
+                    batch.delete(db.doc(`/likes/${doc.id}`));
+                })
+                return db.collection('notifications').where('screamId', '==', screamId).get();
+            })
+            .then(data => {
+                data.forEach(doc => {
+                    batch.delete(db.doc(`/notifications/${doc.id}`));
+                })
+                return batch.commit();
+            })
+            .catch(err => console.error(err));
     })
